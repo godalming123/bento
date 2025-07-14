@@ -1,4 +1,4 @@
-module xb/main/v2
+module xb/xb/v2
 
 go 1.24.2
 

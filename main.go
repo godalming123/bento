@@ -14,10 +14,12 @@ import (
 type sourceConfig struct {
 	Url                   string
 	Compression           string
-	Checksums             map[string]string
+	Checksums             map[string][32]byte
 	FilesToMakeExecutable []string
 	RootPath              string
-	Version               string
+	Version               map[string]string
+	ArchitectureNames     map[string]string
+	HomePage              string
 }
 
 func main() {
@@ -51,39 +53,63 @@ func main() {
 
 	if _, err := os.Stat(sourceDir); os.IsNotExist(err) {
 		sourcesFilePath := path.Join(packageCacheDir, "sources.toml")
+		println("Reading sources config from " + sourcesFilePath)
 		contents, err := os.ReadFile(sourcesFilePath)
 		if err != nil {
 			fail("Failed to read sources file `" + sourcesFilePath + "`: " + err.Error())
 		}
-		architecture := runtime.GOARCH
-		if architecture == "amd64" {
-			architecture = "x86_64"
-		}
-
 		var sourceConfigs map[string]sourceConfig
 		_, err = toml.Decode(string(contents), &sourceConfigs)
 		if err != nil {
-			fail("Failed to read package config `" + sourcesFilePath + "`: " + err.Error())
+			fail("Failed to read sources config `" + sourcesFilePath + "`: " + err.Error())
 		}
 		sourceConfig, ok := sourceConfigs[sourceName]
 		if !ok {
 			fail("There is no config for a source called `" + sourceName + "` in `" + sourcesFilePath + "`")
 		}
-		replacer := strings.NewReplacer("${version}", sourceConfig.Version, "${architecture}", architecture, "${os}", runtime.GOOS)
+		architecture, ok := sourceConfig.ArchitectureNames[runtime.GOARCH]
+		if !ok {
+			architecture = runtime.GOARCH
+		}
+		replacements := []string{"${architecture}", architecture, "${os}", runtime.GOOS}
+		for versionKey, version := range sourceConfig.Version {
+			replacements = append(replacements, "${version."+versionKey+"}", version)
+		}
+		replacer := strings.NewReplacer(replacements...)
 		sourceUrl := replacer.Replace(sourceConfig.Url)
+
 		// TODO: Show progress
-		println("Fetching " + sourceUrl)
+		println("Fetching from " + sourceUrl)
 		response, err := http.Get(sourceUrl)
 		if err != nil {
 			fail("Failed to fetch `" + sourceUrl + "`: " + err.Error())
 		}
 		defer response.Body.Close()
-		println("Extracting")
+
+		// TODO: Waiting for https://github.com/BurntSushi/toml/issues/448 to be implemented to add cryptographic verification
+		// println("Cryptographically verifying source using sha256 hash")
+		// dataBuffer := bytes.Buffer{}
+		// dataBuffer.ReadFrom(response.Body)
+		// dataChecksum := sha256.Sum256(dataBuffer.Bytes())
+		// checkSumKey := replacer.Replace("${architecture}-${os}")
+		// for _, version := range sourceConfig.Version {
+		// 	checkSumKey += "-" + version
+		// }
+		// expectedDataChecksum, ok := sourceConfig.Checksums[checkSumKey]
+		// if !ok {
+		//	 fail("The key `\"" + sourceName + "\".checksums.\"" + checkSumKey + "\"` does not exist in `" + sourcesFilePath + "`. Please specify this key to be " + string(dataChecksum[:]) + " so that bin-exec can crytographically verify the source called `" + sourceName + "`.")
+		// }
+		// if dataChecksum != expectedDataChecksum {
+		// 	fail("Expected sha256 checksum of source to be " + string(expectedDataChecksum[:]) + ", but got " + string(dataChecksum[:]))
+		// }
+
+		println("Extracting into " + sourceDir)
 		err = extract(response.Body, sourceConfig.Compression, sourceDir, replacer.Replace(sourceConfig.RootPath))
 		if err != nil {
 			fail("Failed to extract: ", err.Error())
 		}
 
+		println("Making every file listed in the `" + sourceName + ".filesToMakeExecutable` key executable")
 		for _, fileName := range sourceConfig.FilesToMakeExecutable {
 			absoluteFileName := path.Join(sourceDir, fileName)
 			fileInfo, err := os.Stat(absoluteFileName)

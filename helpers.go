@@ -39,8 +39,16 @@ func extract(
 		partiallyUncompressedStream, err = gzip.NewReader(stream)
 	case ".tar.xz":
 		partiallyUncompressedStream, err = xz.NewReader(stream)
+	case "none":
+		outFile, err := os.Create(destination)
+		if err != nil {
+			return err
+		}
+		defer outFile.Close()
+		_, err = io.Copy(outFile, stream)
+		return err
 	default:
-		return errors.New("Unkown compression format " + compressionType)
+		return errors.New("Unkown compression format `" + compressionType + "`. Supported compression formats are `.tar.gz`, `.tar.xz`, and `none`.")
 	}
 	if err != nil {
 		return err
@@ -66,20 +74,24 @@ func extract(
 
 		switch header.Typeflag {
 		case tar.TypeDir:
-			err := os.Mkdir(headerOutputPath, 0755)
+			err := os.MkdirAll(headerOutputPath, 0755)
 			if err != nil {
 				return err
 			}
 		case tar.TypeReg:
+			err := os.MkdirAll(path.Dir(headerOutputPath), 0755)
+			if err != nil {
+				return err
+			}
 			outFile, err := os.Create(headerOutputPath)
 			if err != nil {
 				return err
 			}
+			defer outFile.Close()
 			_, err = io.Copy(outFile, untarredStream)
 			if err != nil {
 				return err
 			}
-			outFile.Close()
 		}
 	}
 	return nil
