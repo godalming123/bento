@@ -1,7 +1,7 @@
 package main
 
 import (
-	"net/http"
+	// "crypto/sha256"
 	"os"
 	"path"
 	"runtime"
@@ -19,28 +19,49 @@ type sourceConfig struct {
 	RootPath              string
 	Version               map[string]string
 	ArchitectureNames     map[string]string
-	HomePage              string
+	Homepage              string
 }
 
 func main() {
 	if len(os.Args) < 2 {
-		fail("Expected argument for name of binary to run")
+		fail("Expected argument for name of binary or xb command to run")
 	}
-
-	binaryName := os.Args[1]
 
 	cacheDir, err := os.UserCacheDir()
 	if err != nil {
 		fail("Failed to get cache directory: " + err.Error())
 	}
-
 	packageCacheDir := path.Join(cacheDir, "exec-bin")
+	if os.Args[1] == "update" {
+		err := fetchPackageRepository(packageCacheDir)
+		if err != nil {
+			fail(err.Error())
+		}
+		return
+	}
+
+	binaryName := os.Args[1]
 	binariesDir := path.Join(packageCacheDir, "bin")
 	binarySymlinkPath := path.Join(binariesDir, binaryName)
 	binaryRelativePathFromLink, err := os.Readlink(binarySymlinkPath)
 	if os.IsNotExist(err) {
-		fail("TODO: If the package repository (" + packageCacheDir + ") does not exist, then fetch it and retry\n" +
-			"TODO: If there is still an error, tell the user that `binaryName` does not exist and that updating the package repository might fix this")
+		_, err := os.Stat(packageCacheDir)
+		if os.IsNotExist(err) {
+			err = fetchPackageRepository(packageCacheDir)
+			if err != nil {
+				fail(err.Error())
+			}
+			binaryRelativePathFromLink, err = os.Readlink(binarySymlinkPath)
+			if os.IsNotExist(err) {
+				fail("There is no binary called `" + binaryName + "` in `" + binariesDir + "`. Updating the package repository with `xb update` might fix this.")
+			} else if err != nil {
+				fail(err.Error())
+			}
+		} else if err != nil {
+			fail(err.Error())
+		} else {
+			fail("There is no binary called `" + binaryName + "` in `" + binariesDir + "`. Updating the package repository with `xb update` might fix this.")
+		}
 	} else if err != nil {
 		fail("Failed to read the link `" + binarySymlinkPath + "`: " + err.Error())
 	}
@@ -80,31 +101,28 @@ func main() {
 
 		// TODO: Show progress
 		println("Fetching from " + sourceUrl)
-		response, err := http.Get(sourceUrl)
+		response, err := fetch(sourceUrl)
 		if err != nil {
-			fail("Failed to fetch `" + sourceUrl + "`: " + err.Error())
+			fail(err.Error())
 		}
-		defer response.Body.Close()
 
 		// TODO: Waiting for https://github.com/BurntSushi/toml/issues/448 to be implemented to add cryptographic verification
 		// println("Cryptographically verifying source using sha256 hash")
-		// dataBuffer := bytes.Buffer{}
-		// dataBuffer.ReadFrom(response.Body)
-		// dataChecksum := sha256.Sum256(dataBuffer.Bytes())
+		// dataChecksum := sha256.Sum256(response)
 		// checkSumKey := replacer.Replace("${architecture}-${os}")
 		// for _, version := range sourceConfig.Version {
 		// 	checkSumKey += "-" + version
 		// }
 		// expectedDataChecksum, ok := sourceConfig.Checksums[checkSumKey]
 		// if !ok {
-		//	 fail("The key `\"" + sourceName + "\".checksums.\"" + checkSumKey + "\"` does not exist in `" + sourcesFilePath + "`. Please specify this key to be " + string(dataChecksum[:]) + " so that bin-exec can crytographically verify the source called `" + sourceName + "`.")
+		//	 fail("The key `\"" + sourceName + "\".checksums.\"" + checkSumKey + "\"` does not exist in `" + sourcesFilePath + "`. Please specify this key to be " + string(dataChecksum[:]) + " so that exec-bin can crytographically verify the source called `" + sourceName + "`.")
 		// }
 		// if dataChecksum != expectedDataChecksum {
 		// 	fail("Expected sha256 checksum of source to be " + string(expectedDataChecksum[:]) + ", but got " + string(dataChecksum[:]))
 		// }
 
 		println("Extracting into " + sourceDir)
-		err = extract(response.Body, sourceConfig.Compression, sourceDir, replacer.Replace(sourceConfig.RootPath))
+		err = extract(response, sourceConfig.Compression, sourceDir, replacer.Replace(sourceConfig.RootPath))
 		if err != nil {
 			fail("Failed to extract: ", err.Error())
 		}
