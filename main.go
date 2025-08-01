@@ -168,17 +168,31 @@ func main() {
 	if subcommand != "exec" {
 		utils.Fail("`" + subcommand + "` is not a valid subcommand. Subcommands are `help`, `update`, and `exec`")
 	}
-	var sourceName, sourceExecutableRelativePath string
+	var sourceName, sourceExecutableRelativePath, argCompleteShenanigans string
 	utils.TakeArgs(&index, []utils.Argument{
 		{Desc: "The name of the source", Value: &sourceName},
 		{Desc: "The path of the executable within the source", Value: &sourceExecutableRelativePath},
-		{Desc: "Any value (this is ignored by bento) (this is necersarry because when " +
+		{Desc: "Any value (this is mostly ignored by bento) (this is necersarry because when " +
 			"bento is invoked from a shebang like `#!/usr/bin/env -S bento exec " +
 			"SOURCE_NAME EXECUTABLE_NAME`, bento will receive the arguments [`bento`, " +
 			"`exec`, `SOURCE_NAME`, `EXECUTABLE_NAME`, `ARG0`, `ARG1`, ...], and in " +
 			"this case, bento must ignore `ARG0`, and instead pass a different `ARG0` " +
-			"to the executable."},
+			"to the executable)", Value: &argCompleteShenanigans},
 	})
+	// For some reason argcomplete (https://github.com/kislyuk/argcomplete/) executes `bento exec SOURCE_NAME EXECUTABLE_NAME -m argcomplete._check_console_script PATH_TO_SCRIPT`, when these 4 conditions are simultaniously met:
+	// - Argcomplete is setup in the users shell using the "global completion" strategy
+	// - The user has typed the name of a script that is in their path and a space into their shell prompt
+	// - The script uses a shebang like `#!/usr/bin/env bento exec SOURCE_NAME EXECUTABLE_NAME`
+	// - The user presses tab
+	// This causes a problem if bento ignores `argCompleteShenanigans` and the executable EXECUTABLE_NAME runs forever when there is no user input to stdin, because then when the user presses tab to autocomplete options for the script which has a shebang:
+	// 1. The users shell executes argcomplete
+	// 2. Argcomplete executes bento with the above arguments
+	// 3. Bento would execute the executable as normal
+	// 4. The users shell would freeze because bento never exits
+	// To mitagate this, this condition is necersarry
+	if argCompleteShenanigans == "-m" {
+		os.Exit(1)
+	}
 
 	sourcesDir := path.Join(packageCacheDir, "sources")
 	downloadedSourcesDir := path.Join(packageCacheDir, "downloadedSources")

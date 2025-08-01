@@ -35,6 +35,7 @@ If any of these limitations mean that I cannot package something, then I will re
 
 ```sh
 sudo curl --location https://github.com/godalming123/bento/releases/latest/download/linux-amd64 -o /usr/bin/bento
+sudo chmod +x /usr/bin/bento
 ```
 
 <details><summary>Building from source</summary>
@@ -59,7 +60,7 @@ bento update
 `~/.bashrc`
 
 ```diff
-+export PATH="~/.cache/bento/bin:$PATH"
++export PATH="$HOME/.cache/bento/bin:$PATH"
 ```
 
 ## Stargazers over time
