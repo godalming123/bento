@@ -4,6 +4,7 @@ A package manager with a focus on:
 
 - Having lots of packages (although currently there are less than a hundred)
 - Just working on every linux distro
+- Not necesitating root permisions to be installed, and to install packages
 - Being fast at installing and running packages
 - Being small (installed packages do not take too much space)
 - Being minimal (bento itself is a single, statically-linked binary)
@@ -17,8 +18,7 @@ A package manager with a focus on:
 - Support fetching a list of versions of a package from github
 - Implement cryptographic verification of sources
 - Get the user to agree to the license of the sources before they are fetched and extracted
-- Add a way to add entries to the `LD_LIBRARY_PATH` environment variable, so that executables that use dynamically linked libaries (like the one for ghostty) can use libraries from bento instead of system libraries
-  - There could be an automation for [binary-repository](https://github.com/godalming123/binary-repository/) that uses `ldd` to check that all of the dynamically linked libraries that packaged executables require are packaged
+- Consider adding an automation for [binary-repository](https://github.com/godalming123/binary-repository/) that uses `ldd` to check that all of the dynamically linked libraries that packaged executables require are packaged
 - Possibly add support for other unix based operating systems, including freeBSD and macOS
 
 ## Current limitations
@@ -61,6 +61,26 @@ bento update
 
 ```diff
 +export PATH="$HOME/.cache/bento/bin:$PATH"
+```
+
+## Running bento packages as root
+
+TODO: Add documentation for how to use priviledge managers other than `sudo`.
+
+```sh
+sudo sh -c "PATH=$PATH COMMAND_NAME COMMAND_ARGS"
+```
+
+For example:
+
+```sh
+sudo sh -c "PATH=$PATH hx FILE_OWNED_BY_ROOT"
+```
+
+If bento is installed to `/usr/bin`, then you can also use the slightly shorter:
+
+```sh
+sudo $(which COMMAND_NAME) COMMAND_ARGS
 ```
 
 ## Stargazers over time

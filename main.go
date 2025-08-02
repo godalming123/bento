@@ -1,7 +1,9 @@
 package main
 
 import (
+	"encoding/hex"
 	"errors"
+	"fmt"
 	"maps"
 	"os"
 	"path"
@@ -17,7 +19,7 @@ import (
 type unparsedSourceConfig struct {
 	Url                              string
 	Compression                      string
-	Checksums                        map[string][32]byte
+	Checksums                        map[string]string
 	FilesToMakeExecutable            []string
 	RootPath                         string
 	Version                          map[string]string
@@ -32,6 +34,7 @@ type parsedSourceConfig struct {
 	interpolationFunc func(string) (string, error)
 	path              string
 	parsedUrl         string
+	parsedChecksum    [32]byte
 	parsedRootPath    string
 }
 
@@ -82,12 +85,29 @@ func loadSource(sourcesDirPath string, downloadedSourcesDirPath string, loadedSo
 			}
 			return version, nil
 		}
-		return "", errors.New("Expected either `architecture`, or `version.` followed by a key in the `version` value. Got " + s)
+		return "", &sourceLoadingError{nameOfSourceToLoad, "Expected either `architecture`, or `version.` followed by a key in the `version` value. Got " + s}
 	}
 	parsedUrl, err := utils.InterpolateStringLiteral(unparsedSourceConf.Url, interpolationFunc)
 	if err != nil {
 		return parsedSourceConfig{}, err
 	}
+	// Ideally checksum parsing would use https://github.com/BurntSushi/toml/issues/448
+	parsedChecksumString, exists := unparsedSourceConf.Checksums[parsedUrl]
+	if !exists {
+		return parsedSourceConfig{}, &sourceLoadingError{nameOfSourceToLoad, "The checksum for the URL " + parsedUrl + " is not specefied. Bento requires checksums to be specified."}
+	}
+	if len(parsedChecksumString) != 64 {
+		return parsedSourceConfig{}, &sourceLoadingError{nameOfSourceToLoad, "Expected checksum to be 64 charecters, but it is " + fmt.Sprint(len(parsedChecksumString)) + " charecters"}
+	}
+	parsedChecksumSlice, err := hex.DecodeString(parsedChecksumString)
+	if err != nil {
+		return parsedSourceConfig{}, &sourceLoadingError{nameOfSourceToLoad, "Failed to decode checksum: " + err.Error()}
+	}
+	if len(parsedChecksumSlice) != 32 {
+		panic("Unexpected internal state: len(parsedChecksumSlice) = " + fmt.Sprint(len(parsedChecksumSlice)))
+	}
+	var parsedChecksum [32]byte
+	copy(parsedChecksum[:], parsedChecksumSlice)
 	parsedRootPath, err := utils.InterpolateStringLiteral(unparsedSourceConf.RootPath, interpolationFunc)
 	if err != nil {
 		return parsedSourceConfig{}, err
@@ -97,6 +117,7 @@ func loadSource(sourcesDirPath string, downloadedSourcesDirPath string, loadedSo
 		interpolationFunc:    interpolationFunc,
 		path:                 path.Join(downloadedSourcesDirPath, nameOfSourceToLoad),
 		parsedUrl:            parsedUrl,
+		parsedChecksum:       parsedChecksum,
 		parsedRootPath:       parsedRootPath,
 	}
 	loadedSources[nameOfSourceToLoad] = parsedSourceConf
@@ -140,63 +161,60 @@ func loadLibrary(
 	return nil
 }
 
-type argument struct {
-	description string
-	value       *string
-}
-
 func main() {
 	index := 1
 	subcommand := utils.TakeOneArg(&index, "the subcommand to run (either `help`, `update`, or `exec`)")
-	if subcommand == "help" {
+	switch subcommand {
+	case "help":
 		utils.ExpectAllArgsParsed(index)
 		utils.Fail("TODO: Add help message")
-	}
-	cacheDir, err := os.UserCacheDir()
-	if err != nil {
-		utils.Fail("Failed to get cache directory: " + err.Error())
-	}
-	packageCacheDir := path.Join(cacheDir, "bento")
-	if subcommand == "update" {
+	case "update":
+		cacheDir, err := os.UserCacheDir()
+		if err != nil {
+			utils.Fail("Failed to get cache directory: " + err.Error())
+		}
+		packageCacheDir := path.Join(cacheDir, "bento")
 		utils.ExpectAllArgsParsed(index)
 		errs := utils.FetchPackageRepository(packageCacheDir)
 		if len(errs) != 0 {
 			os.Exit(1)
 		}
-		return
+	case "exec":
+		var sourceName, sourceExecutableRelativePath, arg0 string
+		utils.TakeArgs(&index, []utils.Argument{
+			{Desc: "The name of the source", Value: &sourceName},
+			{Desc: "The path of the executable within the source", Value: &sourceExecutableRelativePath},
+			{Desc: "The bento directory plus some charecters, `/`, and some more " +
+				"charecters (normally this is passed in by `/usr/bin/env`, which sends " +
+				"some arguments like [`bento`, `exec`, `SOURCE_NAME`, `EXECUTABLE_NAME`, " +
+				"`SCRIPT_PATH`, `ARG1`, ...] when bento is invoked from a shebang like " +
+				"`#!/usr/bin/env -S bento exec SOURCE_NAME EXECUTABLE_NAME`)",
+				Value: &arg0},
+		})
+		// For some reason argcomplete (https://github.com/kislyuk/argcomplete/) executes `bento exec SOURCE_NAME EXECUTABLE_NAME -m argcomplete._check_console_script PATH_TO_SCRIPT`, when these 4 conditions are simultaniously met:
+		// - Argcomplete is setup in the users shell using the "global completion" strategy
+		// - The user has typed the name of a script that is in their path and a space into their shell prompt
+		// - The script uses a shebang like `#!/usr/bin/env bento exec SOURCE_NAME EXECUTABLE_NAME`
+		// - The user presses tab
+		// This causes a problem if bento ignores `argCompleteShenanigans` and the executable EXECUTABLE_NAME runs forever when there is no user input to stdin, because then when the user presses tab to autocomplete options for the script which has a shebang:
+		// 1. The users shell executes argcomplete
+		// 2. Argcomplete executes bento with the above arguments
+		// 3. Bento would execute the executable as normal
+		// 4. The users shell would freeze because bento never exits
+		// To mitagate this, this condition is necersarry
+		if arg0 == "-m" {
+			os.Exit(1)
+		}
+		exec(sourceName, sourceExecutableRelativePath, path.Dir(path.Dir(arg0)), os.Args[index:])
+	default:
+		utils.Fail("`" + subcommand + "` is not a valid subcommand. Expected either `help`, `update`, or `exec`")
 	}
-	if subcommand != "exec" {
-		utils.Fail("`" + subcommand + "` is not a valid subcommand. Subcommands are `help`, `update`, and `exec`")
-	}
-	var sourceName, sourceExecutableRelativePath, argCompleteShenanigans string
-	utils.TakeArgs(&index, []utils.Argument{
-		{Desc: "The name of the source", Value: &sourceName},
-		{Desc: "The path of the executable within the source", Value: &sourceExecutableRelativePath},
-		{Desc: "Any value (this is mostly ignored by bento) (this is necersarry because when " +
-			"bento is invoked from a shebang like `#!/usr/bin/env -S bento exec " +
-			"SOURCE_NAME EXECUTABLE_NAME`, bento will receive the arguments [`bento`, " +
-			"`exec`, `SOURCE_NAME`, `EXECUTABLE_NAME`, `ARG0`, `ARG1`, ...], and in " +
-			"this case, bento must ignore `ARG0`, and instead pass a different `ARG0` " +
-			"to the executable)", Value: &argCompleteShenanigans},
-	})
-	// For some reason argcomplete (https://github.com/kislyuk/argcomplete/) executes `bento exec SOURCE_NAME EXECUTABLE_NAME -m argcomplete._check_console_script PATH_TO_SCRIPT`, when these 4 conditions are simultaniously met:
-	// - Argcomplete is setup in the users shell using the "global completion" strategy
-	// - The user has typed the name of a script that is in their path and a space into their shell prompt
-	// - The script uses a shebang like `#!/usr/bin/env bento exec SOURCE_NAME EXECUTABLE_NAME`
-	// - The user presses tab
-	// This causes a problem if bento ignores `argCompleteShenanigans` and the executable EXECUTABLE_NAME runs forever when there is no user input to stdin, because then when the user presses tab to autocomplete options for the script which has a shebang:
-	// 1. The users shell executes argcomplete
-	// 2. Argcomplete executes bento with the above arguments
-	// 3. Bento would execute the executable as normal
-	// 4. The users shell would freeze because bento never exits
-	// To mitagate this, this condition is necersarry
-	if argCompleteShenanigans == "-m" {
-		os.Exit(1)
-	}
+}
 
-	sourcesDir := path.Join(packageCacheDir, "sources")
-	downloadedSourcesDir := path.Join(packageCacheDir, "downloadedSources")
-	librariesDir := path.Join(packageCacheDir, "lib")
+func exec(sourceName string, sourceExecutableRelativePath string, bentoDir string, argsToPass []string) {
+	sourcesDir := path.Join(bentoDir, "sources")
+	downloadedSourcesDir := path.Join(bentoDir, "downloadedSources")
+	librariesDir := path.Join(bentoDir, "lib")
 
 	libraries := map[string]parsedLibrary{}
 	sources := map[string]parsedSourceConfig{}
@@ -244,7 +262,8 @@ func main() {
 				Name:                             sourceName,
 				Url:                              sourceConf.parsedUrl,
 				Compression:                      sourceConf.Compression,
-				UseChecksum:                      false, // TODO: Waiting for https://github.com/BurntSushi/toml/issues/448 to be implemented to add cryptographic verification
+				Checksum:                         sourceConf.parsedChecksum,
+				UseChecksum:                      true,
 				FilesToMakeExecutable:            sourceConf.FilesToMakeExecutable,
 				RootPath:                         sourceConf.parsedRootPath,
 				Destination:                      sourceConf.path,
@@ -286,7 +305,7 @@ func main() {
 	for key, value := range executableEnvironment {
 		executableEnv = append(executableEnv, key+"="+value)
 	}
-	err = syscall.Exec(sourceExecutable, append([]string{sourceExecutable}, os.Args[index:]...), executableEnv)
+	err = syscall.Exec(sourceExecutable, append([]string{sourceExecutable}, argsToPass...), executableEnv)
 	if err != nil {
 		utils.Fail("Failed to execute binary `" + sourceExecutable + "`: " + err.Error())
 	}
