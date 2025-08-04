@@ -139,6 +139,7 @@ func extract(
 	rootPath string,
 ) error {
 	stream := bytes.NewReader(data)
+	var uncompressedFileStream io.Reader
 	switch compressionType {
 	case ".tar.gz":
 		partiallyUncompressedStream, err := gzip.NewReader(stream)
@@ -163,19 +164,26 @@ func extract(
 		return extractTar(partiallyUncompressedStream, destination, rootPath)
 	case ".zip":
 		return extractZip(stream, destination, rootPath)
+	case ".gz":
+		var err error
+		uncompressedFileStream, err = gzip.NewReader(stream)
+		if err != nil {
+			return err
+		}
 	case "none":
-		err := os.MkdirAll(path.Dir(destination), 0755)
-		if err != nil {
-			return err
-		}
-		outFile, err := os.Create(destination)
-		if err != nil {
-			return err
-		}
-		defer outFile.Close()
-		_, err = io.Copy(outFile, stream)
-		return err
+		uncompressedFileStream = stream
 	default:
-		return errors.New("Unknown compression format `" + compressionType + "`. Supported compression formats are `.tar.gz`, `.tar.xz`, `.tar.zst`, `.tbz`, `.zip`, and `none`.")
+		return errors.New("Unknown compression format `" + compressionType + "`. Supported compression formats are `.tar.gz`, `.tar.xz`, `.tar.zst`, `.tbz`, `.zip`, `.gz` and `none`.")
 	}
+	err := os.MkdirAll(path.Dir(destination), 0755)
+	if err != nil {
+		return err
+	}
+	outFile, err := os.Create(destination)
+	if err != nil {
+		return err
+	}
+	defer outFile.Close()
+	_, err = io.Copy(outFile, uncompressedFileStream)
+	return err
 }

@@ -25,6 +25,9 @@ type unparsedSourceConfig struct {
 	Version                          map[string]string
 	ArchitectureNames                map[string]string
 	Homepage                         string
+	Licenses                         []string
+	Description                      string
+	ProgrammingLanguage              string
 	Env                              map[string]map[string]string
 	DirectlyDependentSharedLibraries map[string][]string
 }
@@ -167,7 +170,8 @@ func main() {
 	switch subcommand {
 	case "help":
 		utils.ExpectAllArgsParsed(index)
-		utils.Fail("TODO: Add help message")
+		// TODO: Improve help message
+		println("Bento is a cross-distro package manager that can be used without root. For more information, see https://github.com/godalming123/bento.")
 	case "update":
 		cacheDir, err := os.UserCacheDir()
 		if err != nil {
@@ -180,17 +184,27 @@ func main() {
 			os.Exit(1)
 		}
 	case "exec":
-		var sourceName, sourceExecutableRelativePath, arg0 string
+		var sourceName, sourceExecutableRelativePath, lastArg string
+		lastArgDesc := "Either `--arg` followed by an argument to pass to the " +
+			"executable, or the bento directory plus some charecters, `/`, and some " +
+			"more charecters (normally this is passed in by `/usr/bin/env`, which " +
+			"sends some arguments like [`bento`, `exec`, `SOURCE_NAME`, " +
+			"`EXECUTABLE_NAME`, `SCRIPT_PATH`, `ARG1`, ...] when bento is invoked from" +
+			"a shebang like `#!/usr/bin/env -S bento exec SOURCE_NAME EXECUTABLE_NAME`)"
 		utils.TakeArgs(&index, []utils.Argument{
 			{Desc: "The name of the source", Value: &sourceName},
 			{Desc: "The path of the executable within the source", Value: &sourceExecutableRelativePath},
-			{Desc: "The bento directory plus some charecters, `/`, and some more " +
-				"charecters (normally this is passed in by `/usr/bin/env`, which sends " +
-				"some arguments like [`bento`, `exec`, `SOURCE_NAME`, `EXECUTABLE_NAME`, " +
-				"`SCRIPT_PATH`, `ARG1`, ...] when bento is invoked from a shebang like " +
-				"`#!/usr/bin/env -S bento exec SOURCE_NAME EXECUTABLE_NAME`)",
-				Value: &arg0},
+			{Desc: lastArgDesc, Value: &lastArg},
 		})
+		argsToPass := []string{}
+		for lastArg == "--arg" {
+			var argValue string
+			utils.TakeArgs(&index, []utils.Argument{
+				{Desc: "The value of the argument to pass to the executable", Value: &argValue},
+				{Desc: lastArgDesc, Value: &lastArg},
+			})
+			argsToPass = append(argsToPass, argValue)
+		}
 		// For some reason argcomplete (https://github.com/kislyuk/argcomplete/) executes `bento exec SOURCE_NAME EXECUTABLE_NAME -m argcomplete._check_console_script PATH_TO_SCRIPT`, when these 4 conditions are simultaniously met:
 		// - Argcomplete is setup in the users shell using the "global completion" strategy
 		// - The user has typed the name of a script that is in their path and a space into their shell prompt
@@ -202,10 +216,11 @@ func main() {
 		// 3. Bento would execute the executable as normal
 		// 4. The users shell would freeze because bento never exits
 		// To mitagate this, this condition is necersarry
-		if arg0 == "-m" {
+		if lastArg == "-m" {
 			os.Exit(1)
 		}
-		exec(sourceName, sourceExecutableRelativePath, path.Dir(path.Dir(arg0)), os.Args[index:])
+		argsToPass = append(argsToPass, os.Args[index:]...)
+		exec(sourceName, sourceExecutableRelativePath, path.Dir(path.Dir(lastArg)), argsToPass)
 	default:
 		utils.Fail("`" + subcommand + "` is not a valid subcommand. Expected either `help`, `update`, or `exec`")
 	}

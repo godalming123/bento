@@ -17,7 +17,14 @@ A package manager with a focus on:
 - Support using different versions of a package by setting environment variables like `BENTO_helix_VERSION`
 - Support fetching a list of versions of a package from github
 - Implement cryptographic verification of sources
-- Get the user to agree to the license of the sources before they are fetched and extracted
+- Update the list of sources that is displayed to get user confirmation to download sources:
+  - Group the sources by their license
+  - Show extra information about the sources:
+    - The description of the source
+    - Possibly which programming language the source is written in
+    - Possibly the homepage of the source
+  - Properly wrap text that overflows
+- Add automated testing for [binary-repository](https://github.com/godalming123/binary-repository/)
 - Consider adding an automation for [binary-repository](https://github.com/godalming123/binary-repository/) that uses `ldd` to check that all of the dynamically linked libraries that packaged executables require are packaged
 - Possibly add support for other unix based operating systems, including freeBSD and macOS
 
