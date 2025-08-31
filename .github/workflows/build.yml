@@ -33,8 +33,12 @@ jobs:
     - name: Possibly publish stable release
       # If the last commit message is like `vMAJOR.MINOR.PATCH`, then create a stable release with that version instead of creating a prerelease
       run: |
-        if [[ "${{ github.event.head_commit.message }}" =~ '^v\d+\.\d+\.\d+$' ]]; then
-          gh release create "${{ github.event.head_commit.message }}" ./linux-amd64 ./linux-arm64
+        commit_message=$(echo "${{ github.event.head_commit.message }}" | head -1)
+        if [[ "${commit_message}" =~ '^v\d+\.\d+\.\d+$' ]]; then
+          echo "Publishing stable release because the latest commit message is ${commit_message}"
+          gh release create "${commit_message}" ./linux-amd64 ./linux-arm64
+        else
+          echo "Not publishing stable release because the latest commit message is ${commit_message}"
         fi
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
