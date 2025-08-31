@@ -26,8 +26,12 @@ jobs:
       run: GOOS=linux GOARCH=amd64 go build -o linux-amd64
     - name: Build for linux and arm64
       run: GOOS=linux GOARCH=arm64 go build -o linux-arm64
-      # TODO: If the last commit message is like `vMAJOR.MINOR.PATCH`, then create a stable release with that version instead of creating a prerelease
-    - name: Publish release
+    - name: Publish prerelease
       run: gh release create "prerelease/$(date +'%d-%b-%y')" ./linux-amd64 ./linux-arm64 -p
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    - name: Publish stable release # If the last commit message is like `vMAJOR.MINOR.PATCH`, then create a stable release with that version instead of creating a prerelease
+      if: github.event.head_commit.message matches "^v\d+\.\d+\.\d+$"
+      run: gh release create "${{ github.event.head_commit.message }}" ./linux-amd64 ./linux-arm64
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

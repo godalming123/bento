@@ -3,9 +3,11 @@ package utils
 import (
 	"io"
 	"iter"
+	"math/rand"
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const clearBetweenCursorAndScreenEnd = "\033[0J"
@@ -132,9 +134,30 @@ func TrimPrefix(str string, prefix string) (string, bool) {
 	return str, false
 }
 
+type logSeverity uint8
+
+// In order from less severe to more severe
+const (
+	infoSeverity logSeverity = iota
+	nonFatalErrorSeverity
+	fatalErrorSeverity
+)
+
 type log struct {
-	message string
-	isError bool
+	message  string
+	severity logSeverity
+}
+
+func info(message string) log {
+	return log{message: message, severity: infoSeverity}
+}
+
+func nonFatalError(message string) log {
+	return log{message: message, severity: nonFatalErrorSeverity}
+}
+
+func fatalError(message string) log {
+	return log{message: message, severity: fatalErrorSeverity}
 }
 
 type stateWithNotifier[dataType any] struct {
@@ -169,4 +192,13 @@ func (pr *progressReader) Read(p []byte) (int, error) {
 
 func (pr *progressReader) Close() error {
 	return pr.reader.Close()
+}
+
+func ShuffleSlice[T any](slice []T) []T {
+	r := rand.New(rand.NewSource(time.Now().Unix()))
+	out := make([]T, len(slice))
+	for newIndex, oldIndex := range r.Perm(len(slice)) {
+		out[newIndex] = slice[oldIndex]
+	}
+	return out
 }

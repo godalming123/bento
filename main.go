@@ -17,7 +17,8 @@ import (
 )
 
 type unparsedSourceConfig struct {
-	Url                              string
+	UrlInMirror                      string
+	Mirrors                          []string
 	Compression                      string
 	Checksums                        map[string]string
 	FilesToMakeExecutable            []string
@@ -36,7 +37,7 @@ type parsedSourceConfig struct {
 	unparsedSourceConfig
 	interpolationFunc func(string) (string, error)
 	path              string
-	parsedUrl         string
+	parsedUrls        []string
 	parsedChecksum    [32]byte
 	parsedRootPath    string
 }
@@ -90,14 +91,14 @@ func loadSource(sourcesDirPath string, downloadedSourcesDirPath string, loadedSo
 		}
 		return "", &sourceLoadingError{nameOfSourceToLoad, "Expected either `architecture`, or `version.` followed by a key in the `version` value. Got " + s}
 	}
-	parsedUrl, err := utils.InterpolateStringLiteral(unparsedSourceConf.Url, interpolationFunc)
+	parsedUrlInMirror, err := utils.InterpolateStringLiteral(unparsedSourceConf.UrlInMirror, interpolationFunc)
 	if err != nil {
 		return parsedSourceConfig{}, err
 	}
 	// Ideally checksum parsing would use https://github.com/BurntSushi/toml/issues/448
-	parsedChecksumString, exists := unparsedSourceConf.Checksums[parsedUrl]
+	parsedChecksumString, exists := unparsedSourceConf.Checksums[parsedUrlInMirror]
 	if !exists {
-		return parsedSourceConfig{}, &sourceLoadingError{nameOfSourceToLoad, "The checksum for the URL " + parsedUrl + " is not specefied. Bento requires checksums to be specified."}
+		return parsedSourceConfig{}, &sourceLoadingError{nameOfSourceToLoad, "The checksum for " + parsedUrlInMirror + " is not specefied. Bento requires checksums to be specified."}
 	}
 	if len(parsedChecksumString) != 64 {
 		return parsedSourceConfig{}, &sourceLoadingError{nameOfSourceToLoad, "Expected checksum to be 64 charecters, but it is " + fmt.Sprint(len(parsedChecksumString)) + " charecters"}
@@ -115,11 +116,15 @@ func loadSource(sourcesDirPath string, downloadedSourcesDirPath string, loadedSo
 	if err != nil {
 		return parsedSourceConfig{}, err
 	}
+	urls := make([]string, len(unparsedSourceConf.Mirrors))
+	for i, mirror := range unparsedSourceConf.Mirrors {
+		urls[i] = mirror + "/" + parsedUrlInMirror
+	}
 	parsedSourceConf = parsedSourceConfig{
 		unparsedSourceConfig: unparsedSourceConf,
 		interpolationFunc:    interpolationFunc,
 		path:                 path.Join(downloadedSourcesDirPath, nameOfSourceToLoad),
-		parsedUrl:            parsedUrl,
+		parsedUrls:           utils.ShuffleSlice(urls),
 		parsedChecksum:       parsedChecksum,
 		parsedRootPath:       parsedRootPath,
 	}
@@ -164,6 +169,8 @@ func loadLibrary(
 	return nil
 }
 
+const maxParrellelDownloads = 10
+
 func main() {
 	index := 1
 	subcommand := utils.TakeOneArg(&index, "the subcommand to run (either `help`, `update`, or `exec`)")
@@ -179,7 +186,7 @@ func main() {
 		}
 		packageCacheDir := path.Join(cacheDir, "bento")
 		utils.ExpectAllArgsParsed(index)
-		errs := utils.FetchPackageRepository(packageCacheDir)
+		errs := utils.FetchPackageRepository(packageCacheDir, maxParrellelDownloads)
 		if len(errs) != 0 {
 			os.Exit(1)
 		}
@@ -275,7 +282,7 @@ func exec(sourceName string, sourceExecutableRelativePath string, bentoDir strin
 		if os.IsNotExist(err) {
 			downloads = append(downloads, utils.DownloadOptions{
 				Name:                             sourceName,
-				Url:                              sourceConf.parsedUrl,
+				Urls:                             sourceConf.parsedUrls,
 				Compression:                      sourceConf.Compression,
 				Checksum:                         sourceConf.parsedChecksum,
 				UseChecksum:                      true,
@@ -297,12 +304,12 @@ func exec(sourceName string, sourceExecutableRelativePath string, bentoDir strin
 		}
 		println("Download the following " + noun + " to run the binary " + sourceExecutableRelativePath + " from the source " + sourceName + "?")
 		for _, download := range downloads {
-			println(" - " + download.Name + " from " + download.Url)
+			println(" - " + download.Name)
 		}
 		if !utils.GetBoolDefaultYes() {
 			return
 		}
-		errs := utils.DownloadConcurrently(downloads)
+		errs := utils.DownloadConcurrently(downloads, maxParrellelDownloads)
 		if len(errs) > 0 {
 			os.Exit(1)
 		}
