@@ -8,7 +8,7 @@ import (
 	"os"
 	"path"
 	"runtime"
-	"strconv"
+	"slices"
 	"strings"
 	"syscall"
 
@@ -17,35 +17,45 @@ import (
 )
 
 type unparsedSourceConfig struct {
-	UrlInMirror                      string
-	Mirrors                          []string
-	Compression                      string
-	Checksums                        map[string]string
-	FilesToMakeExecutable            []string
-	RootPath                         string
-	Version                          map[string]string
-	ArchitectureNames                map[string]string
-	Homepage                         string
-	Licenses                         []string
-	Description                      string
-	ProgrammingLanguage              string
-	Env                              map[string]map[string]string
-	DirectlyDependentSharedLibraries map[string][]string
+	UrlInMirror                     string
+	Mirrors                         []string
+	Compression                     string
+	Checksums                       map[string]string
+	FilesToMakeExecutable           []string
+	RootPath                        string
+	Version                         map[string]string
+	ArchitectureNames               map[string]string
+	Homepage                        string
+	Licenses                        []string
+	Description                     string
+	ProgrammingLanguage             string
+	Env                             map[string]map[string]string
+	DirectSharedLibraryDependencies map[string][]string
+	ExecutableDependencies          [][2]string
+	InstallationWarnings            []string
+	KnownIssues                     []string
 }
 
 type parsedSourceConfig struct {
-	unparsedSourceConfig
-	interpolationFunc func(string) (string, error)
-	path              string
-	parsedUrls        []string
-	parsedChecksum    [32]byte
-	parsedRootPath    string
+	compression                     string
+	filesToMakeExecutable           []string
+	env                             map[string]map[string]string
+	directSharedLibraryDependencies map[string][]string
+	executableDependencies          [][2]string
+	installationWarnings            []string
+
+	licenseDescription string
+	interpolationFunc  func(string) (string, error)
+	path               string
+	parsedUrls         []string
+	parsedChecksum     [32]byte
+	parsedRootPath     string
 }
 
 type unparsedLibrary struct {
-	Source                           string
-	Directory                        string
-	DirectlyDependentSharedLibraries []string
+	Source                          string
+	Directory                       string
+	DirectSharedLibraryDependencies []string
 }
 
 type parsedLibrary struct {
@@ -66,6 +76,7 @@ func loadSource(sourcesDirPath string, downloadedSourcesDirPath string, loadedSo
 	if sourceLoaded {
 		return parsedSourceConf, nil
 	}
+
 	contents, err := os.ReadFile(path.Join(sourcesDirPath, nameOfSourceToLoad+".toml"))
 	if err != nil {
 		return parsedSourceConfig{}, &sourceLoadingError{nameOfSourceToLoad, err.Error()}
@@ -75,10 +86,27 @@ func loadSource(sourcesDirPath string, downloadedSourcesDirPath string, loadedSo
 	if err != nil {
 		return parsedSourceConfig{}, &sourceLoadingError{nameOfSourceToLoad, err.Error()}
 	}
+
+	licenseDescription := ""
+	switch len(unparsedSourceConf.Licenses) {
+	case 0:
+		licenseDescription = "with an unknown license"
+	case 1:
+		licenseDescription = "licensed under " + unparsedSourceConf.Licenses[0]
+	default:
+		licenseDescription = "licensed under "
+		slices.Sort(unparsedSourceConf.Licenses)
+		for _, license := range unparsedSourceConf.Licenses[0 : len(unparsedSourceConf.Licenses)-2] {
+			licenseDescription += license + ", "
+		}
+		licenseDescription += "and " + unparsedSourceConf.Licenses[len(unparsedSourceConf.Licenses)-1]
+	}
+
 	architecture, ok := unparsedSourceConf.ArchitectureNames[runtime.GOARCH]
 	if !ok {
 		architecture = runtime.GOARCH
 	}
+
 	interpolationFunc := func(s string) (string, error) {
 		if s == "architecture" {
 			return architecture, nil
@@ -91,42 +119,53 @@ func loadSource(sourcesDirPath string, downloadedSourcesDirPath string, loadedSo
 		}
 		return "", &sourceLoadingError{nameOfSourceToLoad, "Expected either `architecture`, or `version.` followed by a key in the `version` value. Got " + s}
 	}
-	parsedUrlInMirror, err := utils.InterpolateStringLiteral(unparsedSourceConf.UrlInMirror, interpolationFunc)
+
+	urlInMirror, err := utils.InterpolateStringLiteral(unparsedSourceConf.UrlInMirror, interpolationFunc)
 	if err != nil {
 		return parsedSourceConfig{}, err
 	}
+
 	// Ideally checksum parsing would use https://github.com/BurntSushi/toml/issues/448
-	parsedChecksumString, exists := unparsedSourceConf.Checksums[parsedUrlInMirror]
+	checksumString, exists := unparsedSourceConf.Checksums[urlInMirror]
 	if !exists {
-		return parsedSourceConfig{}, &sourceLoadingError{nameOfSourceToLoad, "The checksum for " + parsedUrlInMirror + " is not specefied. Bento requires checksums to be specified."}
+		return parsedSourceConfig{}, &sourceLoadingError{nameOfSourceToLoad, "The checksum for " + urlInMirror + " is not specified. Bento requires checksums to be specified."}
 	}
-	if len(parsedChecksumString) != 64 {
-		return parsedSourceConfig{}, &sourceLoadingError{nameOfSourceToLoad, "Expected checksum to be 64 charecters, but it is " + fmt.Sprint(len(parsedChecksumString)) + " charecters"}
+	if len(checksumString) != 64 {
+		return parsedSourceConfig{}, &sourceLoadingError{nameOfSourceToLoad, "Expected checksum to be 64 characters, but it is " + fmt.Sprint(len(checksumString)) + " characters"}
 	}
-	parsedChecksumSlice, err := hex.DecodeString(parsedChecksumString)
+	checksumSlice, err := hex.DecodeString(checksumString)
 	if err != nil {
 		return parsedSourceConfig{}, &sourceLoadingError{nameOfSourceToLoad, "Failed to decode checksum: " + err.Error()}
 	}
-	if len(parsedChecksumSlice) != 32 {
-		panic("Unexpected internal state: len(parsedChecksumSlice) = " + fmt.Sprint(len(parsedChecksumSlice)))
+	if len(checksumSlice) != 32 {
+		panic("Unexpected internal state: len(parsedChecksumSlice) = " + fmt.Sprint(len(checksumSlice)))
 	}
-	var parsedChecksum [32]byte
-	copy(parsedChecksum[:], parsedChecksumSlice)
-	parsedRootPath, err := utils.InterpolateStringLiteral(unparsedSourceConf.RootPath, interpolationFunc)
+	var checksum [32]byte
+	copy(checksum[:], checksumSlice)
+
+	rootPath, err := utils.InterpolateStringLiteral(unparsedSourceConf.RootPath, interpolationFunc)
 	if err != nil {
 		return parsedSourceConfig{}, err
 	}
+
 	urls := make([]string, len(unparsedSourceConf.Mirrors))
 	for i, mirror := range unparsedSourceConf.Mirrors {
-		urls[i] = mirror + "/" + parsedUrlInMirror
+		urls[i] = mirror + "/" + urlInMirror
 	}
+
 	parsedSourceConf = parsedSourceConfig{
-		unparsedSourceConfig: unparsedSourceConf,
-		interpolationFunc:    interpolationFunc,
-		path:                 path.Join(downloadedSourcesDirPath, nameOfSourceToLoad),
-		parsedUrls:           utils.ShuffleSlice(urls),
-		parsedChecksum:       parsedChecksum,
-		parsedRootPath:       parsedRootPath,
+		compression:                     unparsedSourceConf.Compression,
+		filesToMakeExecutable:           unparsedSourceConf.FilesToMakeExecutable,
+		env:                             unparsedSourceConf.Env,
+		directSharedLibraryDependencies: unparsedSourceConf.DirectSharedLibraryDependencies,
+		executableDependencies:          unparsedSourceConf.ExecutableDependencies,
+		installationWarnings:            unparsedSourceConf.InstallationWarnings,
+		licenseDescription:              licenseDescription,
+		interpolationFunc:               interpolationFunc,
+		path:                            path.Join(downloadedSourcesDirPath, nameOfSourceToLoad),
+		parsedUrls:                      utils.ShuffleSlice(urls),
+		parsedChecksum:                  checksum,
+		parsedRootPath:                  rootPath,
 	}
 	loadedSources[nameOfSourceToLoad] = parsedSourceConf
 	return parsedSourceConf, nil
@@ -153,8 +192,8 @@ func loadLibrary(
 	if err != nil {
 		return errors.New("Failed to load library " + nameOfLibraryToLoad + ": " + err.Error())
 	}
-	for _, directlyDependentSharedLibrary := range unparsedLibraryConfig.DirectlyDependentSharedLibraries {
-		err := loadLibrary(librariesDirPath, sourcesDirPath, downloadedSourcesDirPath, loadedLibraries, loadedSources, directlyDependentSharedLibrary)
+	for _, directSharedLibraryDependency := range unparsedLibraryConfig.DirectSharedLibraryDependencies {
+		err := loadLibrary(librariesDirPath, sourcesDirPath, downloadedSourcesDirPath, loadedLibraries, loadedSources, directSharedLibraryDependency)
 		if err != nil {
 			return err
 		}
@@ -193,8 +232,8 @@ func main() {
 	case "exec":
 		var sourceName, sourceExecutableRelativePath, lastArg string
 		lastArgDesc := "Either `--arg` followed by an argument to pass to the " +
-			"executable, or the bento directory plus some charecters, `/`, and some " +
-			"more charecters (normally this is passed in by `/usr/bin/env`, which " +
+			"executable, or the bento directory plus some characters, `/`, and some " +
+			"more characters (normally this is passed in by `/usr/bin/env`, which " +
 			"sends some arguments like [`bento`, `exec`, `SOURCE_NAME`, " +
 			"`EXECUTABLE_NAME`, `SCRIPT_PATH`, `ARG1`, ...] when bento is invoked from" +
 			"a shebang like `#!/usr/bin/env -S bento exec SOURCE_NAME EXECUTABLE_NAME`)"
@@ -212,12 +251,12 @@ func main() {
 			})
 			argsToPass = append(argsToPass, argValue)
 		}
-		// For some reason argcomplete (https://github.com/kislyuk/argcomplete/) executes `bento exec SOURCE_NAME EXECUTABLE_NAME -m argcomplete._check_console_script PATH_TO_SCRIPT`, when these 4 conditions are simultaniously met:
+		// For some reason argcomplete (https://github.com/kislyuk/argcomplete/) executes `bento exec SOURCE_NAME EXECUTABLE_NAME -m argcomplete._check_console_script PATH_TO_SCRIPT`, when these 4 conditions are simultaneously met:
 		// - Argcomplete is setup in the users shell using the "global completion" strategy
 		// - The user has typed the name of a script that is in their path and a space into their shell prompt
 		// - The script uses a shebang like `#!/usr/bin/env bento exec SOURCE_NAME EXECUTABLE_NAME`
 		// - The user presses tab
-		// This causes a problem if bento ignores `argCompleteShenanigans` and the executable EXECUTABLE_NAME runs forever when there is no user input to stdin, because then when the user presses tab to autocomplete options for the script which has a shebang:
+		// This causes a problem if bento ignores `lastArg` and the executable EXECUTABLE_NAME runs forever when there is no user input to stdin, because then when the user presses tab to autocomplete options for the script which has a shebang:
 		// 1. The users shell executes argcomplete
 		// 2. Argcomplete executes bento with the above arguments
 		// 3. Bento would execute the executable as normal
@@ -233,18 +272,77 @@ func main() {
 	}
 }
 
-func exec(sourceName string, sourceExecutableRelativePath string, bentoDir string, argsToPass []string) {
-	sourcesDir := path.Join(bentoDir, "sources")
-	downloadedSourcesDir := path.Join(bentoDir, "downloadedSources")
-	librariesDir := path.Join(bentoDir, "lib")
+func loadExecutable(
+	sourcesDir string,
+	downloadedSourcesDir string,
+	loadedSources map[string]parsedSourceConfig,
 
-	libraries := map[string]parsedLibrary{}
-	sources := map[string]parsedSourceConfig{}
-	sourceConf, err := loadSource(sourcesDir, downloadedSourcesDir, sources, sourceName)
+	librariesDir string,
+	loadedLibraries map[string]parsedLibrary,
+
+	sourceName string,
+	sourceExecutableRelativePath string,
+	loadedExecutables map[string]string,
+	executableEnvironment map[string]string,
+) (string, error) {
+	if executable, ok := loadedExecutables[sourceName+" "+sourceExecutableRelativePath]; ok {
+		return executable, nil
+	}
+
+	sourceConf, err := loadSource(sourcesDir, downloadedSourcesDir, loadedSources, sourceName)
 	if err != nil {
-		utils.Fail(err.Error())
+		return "", err
 	}
 	sourceExecutable := path.Join(sourceConf.path, sourceExecutableRelativePath)
+
+	for _, executable := range sourceConf.executableDependencies {
+		_, err := loadExecutable(
+			sourcesDir,
+			downloadedSourcesDir,
+			loadedSources,
+			librariesDir,
+			loadedLibraries,
+			executable[0],
+			executable[1],
+			loadedExecutables,
+			executableEnvironment,
+		)
+		if err != nil {
+			return "", err
+		}
+	}
+
+	executableEnvironmentConfig, _ := sourceConf.env[sourceExecutableRelativePath]
+	for envName, envValue := range executableEnvironmentConfig {
+		replacedValue, err := utils.InterpolateStringLiteral(envValue, func(interpolation string) (string, error) {
+			source, err := loadSource(sourcesDir, downloadedSourcesDir, loadedSources, interpolation)
+			if err != nil {
+				return "", err
+			}
+			return source.path, nil
+		})
+		if err != nil {
+			return "", err
+		}
+		executableEnvironment[envName] = replacedValue
+	}
+
+	directSharedLibraryDependencies, _ := sourceConf.directSharedLibraryDependencies[sourceExecutableRelativePath]
+	for _, directSharedLibraryDependency := range directSharedLibraryDependencies {
+		err := loadLibrary(librariesDir, sourcesDir, downloadedSourcesDir, loadedLibraries, loadedSources, directSharedLibraryDependency)
+		if err != nil {
+			return "", err
+		}
+	}
+
+	loadedExecutables[sourceName+" "+sourceExecutableRelativePath] = sourceExecutable
+	return sourceExecutable, nil
+}
+
+func exec(sourceName string, sourceExecutableRelativePath string, bentoDir string, argsToPass []string) {
+	libraries := map[string]parsedLibrary{}
+	sources := map[string]parsedSourceConfig{}
+	executables := map[string]string{}
 
 	executableEnvironmentUnparsed := os.Environ()
 	executableEnvironment := map[string]string{}
@@ -253,40 +351,36 @@ func exec(sourceName string, sourceExecutableRelativePath string, bentoDir strin
 		executableEnvironment[environmentVariableSplit[0]] = environmentVariableSplit[1]
 	}
 
-	executableEnvironmentConfig, _ := sourceConf.Env[sourceExecutableRelativePath]
-	for envName, envValue := range executableEnvironmentConfig {
-		replacedValue, err := utils.InterpolateStringLiteral(envValue, func(interpolation string) (string, error) {
-			source, err := loadSource(sourcesDir, downloadedSourcesDir, sources, interpolation)
-			if err != nil {
-				return "", err
-			}
-			return source.path, nil
-		})
-		if err != nil {
-			utils.Fail(err.Error())
-		}
-		executableEnvironment[envName] = replacedValue
-	}
-
-	directlyDependentSharedLibraries, _ := sourceConf.DirectlyDependentSharedLibraries[sourceExecutableRelativePath]
-	for _, directlyDependentSharedLibrary := range directlyDependentSharedLibraries {
-		err := loadLibrary(librariesDir, sourcesDir, downloadedSourcesDir, libraries, sources, directlyDependentSharedLibrary)
-		if err != nil {
-			utils.Fail(err.Error())
-		}
+	sourceExecutable, err := loadExecutable(
+		path.Join(bentoDir, "sources"),
+		path.Join(bentoDir, "downloadedSources"),
+		sources, path.Join(bentoDir, "lib"),
+		libraries,
+		sourceName,
+		sourceExecutableRelativePath,
+		executables,
+		executableEnvironment,
+	)
+	if err != nil {
+		utils.Fail(err.Error())
 	}
 
 	downloads := make([]utils.DownloadOptions, 0, len(sources))
+	downloadsSortedByLicense := map[string][][]string{}
 	for sourceName, sourceConf := range sources {
 		_, err := os.Stat(sourceConf.path)
 		if os.IsNotExist(err) {
+			downloadsSortedByLicense[sourceConf.licenseDescription] = append(
+				downloadsSortedByLicense[sourceConf.licenseDescription],
+				append([]string{sourceName}, sourceConf.installationWarnings...),
+			)
 			downloads = append(downloads, utils.DownloadOptions{
 				Name:                             sourceName,
 				Urls:                             sourceConf.parsedUrls,
-				Compression:                      sourceConf.Compression,
+				Compression:                      sourceConf.compression,
 				Checksum:                         sourceConf.parsedChecksum,
 				UseChecksum:                      true,
-				FilesToMakeExecutable:            sourceConf.FilesToMakeExecutable,
+				FilesToMakeExecutable:            sourceConf.filesToMakeExecutable,
 				RootPath:                         sourceConf.parsedRootPath,
 				Destination:                      sourceConf.path,
 				DeleteExistingFilesAtDestination: false,
@@ -296,15 +390,15 @@ func exec(sourceName string, sourceExecutableRelativePath string, bentoDir strin
 		}
 	}
 	if len(downloads) > 0 {
-		noun := ""
-		if len(downloads) == 1 {
-			noun = "source"
-		} else {
-			noun = strconv.FormatInt(int64(len(downloads)), 10) + " sources"
-		}
-		println("Download the following " + noun + " to run the binary " + sourceExecutableRelativePath + " from the source " + sourceName + "?")
-		for _, download := range downloads {
-			println(" - " + download.Name)
+		println("Download the following " + utils.CreateNoun(len(downloads), "source", "sources") + " to run the binary " + sourceExecutableRelativePath + " from the source " + sourceName + "?")
+		for licenseHeader, sources := range downloadsSortedByLicense {
+			println("- " + utils.AnsiBold + utils.CreateNoun(len(sources), "A source", "sources") + " " + licenseHeader + utils.AnsiReset)
+			for _, source := range sources {
+				println("  - " + source[0])
+				for _, installationWarning := range source[1:] {
+					println("    - " + installationWarning)
+				}
+			}
 		}
 		if !utils.GetBoolDefaultYes() {
 			return

@@ -10,10 +10,20 @@ import (
 	"time"
 )
 
-const clearBetweenCursorAndScreenEnd = "\033[0J"
+func CreateNoun(quantity int, singularNoun string, pluralNoun string) string {
+	if quantity == 1 {
+		return singularNoun
+	} else {
+		return strconv.FormatInt(int64(quantity), 10) + " " + pluralNoun
+	}
+}
 
-func moveCursorUp(numberOfLines int) {
-	print("\033[" + strconv.Itoa(numberOfLines) + "A")
+const AnsiClearBetweenCursorAndScreenEnd = "\033[0J"
+const AnsiBold = "\033[1m"
+const AnsiReset = "\033[0m"
+
+func AnsiMoveCursorUp(numberOfLines int) string {
+	return "\033[" + strconv.Itoa(numberOfLines) + "A"
 }
 
 func GetBoolDefaultYes() bool {
@@ -42,13 +52,13 @@ func GetBoolDefaultYes() bool {
 }
 
 type InterpolationError struct {
-	CharecterIndex int
+	CharacterIndex int
 	MessageLines   []string
 	InputString    string
 }
 
 func (e *InterpolationError) Error() string {
-	return "`" + e.InputString + "`\n" + strings.Repeat(" ", e.CharecterIndex+1) + "\n^ error occured here\n" + strings.Join(e.MessageLines, "\n")
+	return "`" + e.InputString + "`\n" + strings.Repeat(" ", e.CharacterIndex+1) + "\n^ error occurred here\n" + strings.Join(e.MessageLines, "\n")
 }
 
 const accidentalInterpolationProtectionMessage = "If you do not want to use an interpolation use `$$` instead of `$`"
@@ -64,7 +74,7 @@ func InterpolateStringLiteral(stringLiteral string, getInterpolationValue func(s
 			index += 1
 			if index >= len(stringLiteral) {
 				return "", &InterpolationError{
-					CharecterIndex: len(stringLiteral) - 1,
+					CharacterIndex: len(stringLiteral) - 1,
 					MessageLines:   errMsg,
 					InputString:    stringLiteral,
 				}
@@ -78,7 +88,7 @@ func InterpolateStringLiteral(stringLiteral string, getInterpolationValue func(s
 					index += 1
 					if index >= len(stringLiteral) {
 						return "", &InterpolationError{
-							CharecterIndex: len(stringLiteral) - 1,
+							CharacterIndex: len(stringLiteral) - 1,
 							MessageLines: []string{
 								"Unclosed interpolation chunk",
 								"Expected `}` to close the interpolation",
@@ -91,7 +101,7 @@ func InterpolateStringLiteral(stringLiteral string, getInterpolationValue func(s
 				interpolationValue, err := getInterpolationValue(stringLiteral[interpolationIdentStart:index])
 				if err != nil {
 					return "", &InterpolationError{
-						CharecterIndex: interpolationIdentStart,
+						CharacterIndex: interpolationIdentStart,
 						MessageLines:   []string{"Invalid interpolation chunk: " + err.Error()},
 						InputString:    stringLiteral,
 					}
@@ -99,7 +109,7 @@ func InterpolateStringLiteral(stringLiteral string, getInterpolationValue func(s
 				out += interpolationValue
 			default:
 				return "", &InterpolationError{
-					CharecterIndex: index,
+					CharacterIndex: index,
 					MessageLines:   errMsg,
 					InputString:    stringLiteral,
 				}

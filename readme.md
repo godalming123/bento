@@ -4,7 +4,7 @@ A package manager with a focus on:
 
 - Having lots of packages (although currently there are less than a hundred)
 - Just working on every linux distro
-- Not necesitating root permisions to be installed, and to install packages
+- Not necesitating root permissions to be installed, and to install packages
 - Being fast at installing and running packages
 - Being small (installed packages do not take too much space)
 - Being minimal (bento itself is a single, statically-linked binary)
@@ -16,8 +16,7 @@ A package manager with a focus on:
 - Support installing different versions of the same package at the same time
 - Support using different versions of a package by setting environment variables like `BENTO_helix_VERSION`
 - Support fetching a list of versions of a package from github
-- Update the list of sources that is displayed to get user confirmation to download sources:
-  - Group the sources by their license
+- Improve the list of sources that is displayed to get user confirmation to download sources:
   - Show extra information about the sources:
     - The description of the source
     - Possibly which programming language the source is written in
@@ -33,7 +32,7 @@ If any of these limitations mean that I cannot package something, then I will re
 
 - Binary names must be exclusive
 - Library names must be exclusive
-- There are no post install scripts (I don't like post install scripts becuase they can sometimes be the longest part of a software installation, and there is no way to tell how long they will take)
+- There are no post install scripts (I don't like post install scripts because they can sometimes be the longest part of a software installation, and there is no way to tell how long they will take)
 
 ## Installation
 
@@ -71,7 +70,7 @@ bento update
 
 ## Running bento packages as root
 
-TODO: Add documentation for how to use priviledge managers other than `sudo`.
+TODO: Add documentation for how to use privilege managers other than `sudo`.
 
 ```sh
 sudo sh -c "PATH=$PATH COMMAND_NAME COMMAND_ARGS"

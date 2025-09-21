@@ -1,15 +1,19 @@
 package utils
 
-import "bytes"
-import "crypto/sha256"
-import "encoding/hex"
-import "errors"
-import "fmt"
-import "io"
-import "net/http"
-import "os"
-import "path"
-import "strconv"
+import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"path"
+	"strconv"
+	"strings"
+	"time"
+)
 
 func fetch(url string, status stateWithNotifier[string]) ([]byte, error) {
 	status.setState("fetching")
@@ -117,7 +121,7 @@ func download(options DownloadOptions, status stateWithNotifier[string], logs ch
 	status.setState("failed")
 }
 
-func DownloadConcurrently(sources []DownloadOptions, maxParrallelDownloads uint) []error {
+func DownloadConcurrently(sources []DownloadOptions, maxParallelDownloads uint) []error {
 	statuses := make([]string, len(sources))
 	for index := range statuses {
 		statuses[index] = "queued"
@@ -128,8 +132,10 @@ func DownloadConcurrently(sources []DownloadOptions, maxParrallelDownloads uint)
 	errs := []error{}
 	startedDownloads := 0
 	downloadsInProgress := uint(0)
+	lastRedrawTime := time.Date(0, time.January, 0, 0, 0, 0, 0, nil)
+	var printBuffer strings.Builder
 	for true {
-		for downloadsInProgress < maxParrallelDownloads && startedDownloads < len(sources) {
+		for downloadsInProgress < maxParallelDownloads && startedDownloads < len(sources) {
 			go download(sources[startedDownloads], stateWithNotifier[string]{state: &statuses[startedDownloads], notifier: statusUpdated}, logs)
 			startedDownloads += 1
 			downloadsInProgress += 1
@@ -137,7 +143,13 @@ func DownloadConcurrently(sources []DownloadOptions, maxParrallelDownloads uint)
 		if downloadsInProgress > 0 || len(statusUpdated) > 0 {
 			<-statusUpdated
 		}
-		print(clearBetweenCursorAndScreenEnd)
+		printBuffer.Write([]byte(AnsiClearBetweenCursorAndScreenEnd))
+		// Debounce the list redraws to mitagate the terminal flashing
+		now := time.Now()
+		if now.Sub(lastRedrawTime).Milliseconds() < 30 {
+			time.Sleep(lastRedrawTime.Add(time.Millisecond * 30).Sub(now))
+		}
+		lastRedrawTime = now
 		for len(logs) > 0 {
 			log := <-logs
 			if log.severity >= nonFatalErrorSeverity {
@@ -147,10 +159,12 @@ func DownloadConcurrently(sources []DownloadOptions, maxParrallelDownloads uint)
 					errs = append(errs, errors.New(log.message))
 				}
 			} else {
-				println(log.message)
+				printBuffer.Write([]byte(log.message))
+				printBuffer.WriteByte('\n')
 			}
 		}
 		if downloadsInProgress == 0 {
+			print(printBuffer.String())
 			break
 		}
 		downloadsInProgress = 0
@@ -158,15 +172,16 @@ func DownloadConcurrently(sources []DownloadOptions, maxParrallelDownloads uint)
 			if statuses[i] != "done" && statuses[i] != "failed" && statuses[i] != "queued" {
 				downloadsInProgress += 1
 			}
-			println(source.Name + ": " + statuses[i])
+			printBuffer.Write([]byte(source.Name + ": " + statuses[i] + "\n"))
 		}
-		moveCursorUp(len(sources))
-		os.Stdout.Sync()
+		printBuffer.Write([]byte(AnsiMoveCursorUp(len(sources))))
+		print(printBuffer.String()) // Print everything in one go to mitagate the terminal flashing
+		printBuffer.Reset()
 	}
 	return errs
 }
 
-func FetchPackageRepository(packageCacheDir string, maxParrallelDownloads uint) []error {
+func FetchPackageRepository(packageCacheDir string, maxParallelDownloads uint) []error {
 	return DownloadConcurrently([]DownloadOptions{{
 		Name:                             "Package repository",
 		Urls:                             []string{"https://github.com/godalming123/binary-repository/archive/refs/heads/main.zip"},
@@ -175,5 +190,5 @@ func FetchPackageRepository(packageCacheDir string, maxParrallelDownloads uint) 
 		RootPath:                         "binary-repository-main",
 		Destination:                      packageCacheDir,
 		DeleteExistingFilesAtDestination: true,
-	}}, maxParrallelDownloads)
+	}}, maxParallelDownloads)
 }
