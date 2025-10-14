@@ -60,12 +60,15 @@ go install
 bento update
 ```
 
-### 3. Add the package repository to your `PATH`
+### 3. Add directories to your `PATH`
+
+- `$HOME/.cache/bento/bin` is the directory where all of the binaries in the package repository are stored
+- `$HOME/.local/bin` is a directory that some of the packages in the package repository install binaries to
 
 `~/.bashrc`
 
 ```diff
-+export PATH="$HOME/.cache/bento/bin:$PATH"
++export PATH="$HOME/.cache/bento/bin:$HOME/.local/bin:$PATH"
 ```
 
 ## Running bento packages as root

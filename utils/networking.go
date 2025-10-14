@@ -132,7 +132,7 @@ func DownloadConcurrently(sources []DownloadOptions, maxParallelDownloads uint) 
 	errs := []error{}
 	startedDownloads := 0
 	downloadsInProgress := uint(0)
-	lastRedrawTime := time.Date(0, time.January, 0, 0, 0, 0, 0, nil)
+	lastRedrawTime := time.Date(0, time.January, 0, 0, 0, 0, 0, time.UTC)
 	var printBuffer strings.Builder
 	for true {
 		for downloadsInProgress < maxParallelDownloads && startedDownloads < len(sources) {
