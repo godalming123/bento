@@ -15,8 +15,43 @@ import (
 	"time"
 )
 
-func fetch(url string, status stateWithNotifier[string]) ([]byte, error) {
-	status.setState("fetching")
+type downloadStatus = uint8
+
+const (
+	failed downloadStatus = iota
+	queued
+	checkingHash
+	deletingOldFiles
+	extracting
+	makingFilesExecutable
+	done
+	fetchingUnknownPercentage
+	fetchingKnownPercentage // The percentage downloaded is the value - `downloadingKnownPercentage`
+)
+
+func downloadStatusToAnsiString(status downloadStatus) string {
+	switch status {
+	case failed:
+		return AnsiFgRed + "failed" + AnsiReset
+	case queued:
+		return AnsiFgYellow + "queued" + AnsiReset
+	case fetchingUnknownPercentage:
+		return AnsiFgCyan + "fetching" + AnsiReset
+	default:
+		return fmt.Sprintf(AnsiFgCyan+"fetching (%3d%%)"+AnsiReset, status-fetchingKnownPercentage)
+	case checkingHash:
+		return "checking hash" + AnsiReset
+	case extracting:
+		return AnsiFgBlue + "extracting" + AnsiReset
+	case makingFilesExecutable:
+		return "making files executable" + AnsiReset
+	case done:
+		return AnsiFgGreen + "done" + AnsiReset
+	}
+}
+
+func fetch(url string, status stateWithNotifier[downloadStatus]) ([]byte, error) {
+	status.setState(fetchingUnknownPercentage)
 	response, err := http.Get(url)
 	if err != nil {
 		return []byte{}, err
@@ -35,7 +70,7 @@ func fetch(url string, status stateWithNotifier[string]) ([]byte, error) {
 			progress{int(length), 0},
 			response.Body,
 			func(p progress) {
-				status.setState(fmt.Sprintf("fetching (%3d%%)", (p.contentReadInBytes*100)/p.contentLengthInBytes))
+				status.setState(fetchingKnownPercentage + downloadStatus(((p.contentReadInBytes * 100) / p.contentLengthInBytes)))
 			},
 		}
 	}
@@ -62,7 +97,7 @@ type DownloadOptions struct {
 	DeleteExistingFilesAtDestination bool
 }
 
-func download(options DownloadOptions, status stateWithNotifier[string], logs chan<- log) {
+func download(options DownloadOptions, status stateWithNotifier[downloadStatus], logs chan<- log) {
 	for _, url := range options.Urls {
 		response, err := fetch(url, status)
 		if err != nil {
@@ -72,7 +107,7 @@ func download(options DownloadOptions, status stateWithNotifier[string], logs ch
 		logs <- info("Fetched `" + options.Name + "` from `" + url + "`")
 
 		if options.UseChecksum {
-			status.setState("checking hash")
+			status.setState(checkingHash)
 			dataChecksum := sha256.Sum256(response)
 			if dataChecksum != options.Checksum {
 				logs <- nonFatalError("Expected sha256 checksum of `" + options.Name + "` to be 0x" + hex.EncodeToString(options.Checksum[:]) + ", but got 0x" + hex.EncodeToString(dataChecksum[:]))
@@ -82,24 +117,24 @@ func download(options DownloadOptions, status stateWithNotifier[string], logs ch
 		}
 
 		if options.DeleteExistingFilesAtDestination {
-			status.setState("deleting old files")
+			status.setState(deletingOldFiles)
 			err := os.RemoveAll(options.Destination)
 			if err != nil && !os.IsNotExist(err) {
 				logs <- fatalError(err.Error())
 			}
 		}
 
-		status.setState("extracting")
+		status.setState(extracting)
 		err = extract(response, options.Compression, options.Destination, options.RootPath)
 		if err != nil {
 			logs <- fatalError("Failed to extract `" + options.Name + "`: " + err.Error())
-			status.setState("failed")
+			status.setState(failed)
 			return
 		}
 		logs <- info("Extracted `" + options.Name + "` into " + options.Destination)
 
-		for i, fileName := range options.FilesToMakeExecutable {
-			status.setState(fmt.Sprintf("making files executable (%d/%d)", i+1, len(options.FilesToMakeExecutable)))
+		for _, fileName := range options.FilesToMakeExecutable {
+			status.setState(makingFilesExecutable)
 			absoluteFileName := path.Join(options.Destination, fileName)
 			fileInfo, err := os.Stat(absoluteFileName)
 			if err != nil {
@@ -114,17 +149,17 @@ func download(options DownloadOptions, status stateWithNotifier[string], logs ch
 			logs <- info("Made `" + absoluteFileName + "` executable")
 		}
 
-		status.setState("done")
+		status.setState(done)
 		return
 	}
 	logs <- fatalError(fmt.Sprintf("Tried fetching `%s` from all %d URLs, but none worked", options.Name, len(options.Urls)))
-	status.setState("failed")
+	status.setState(failed)
 }
 
 func DownloadConcurrently(sources []DownloadOptions, maxParallelDownloads uint) []error {
-	statuses := make([]string, len(sources))
+	statuses := make([]downloadStatus, len(sources))
 	for index := range statuses {
-		statuses[index] = "queued"
+		statuses[index] = queued
 	}
 	statusUpdated := make(chan struct{}, 1)
 	logs := make(chan log, 10)
@@ -136,7 +171,7 @@ func DownloadConcurrently(sources []DownloadOptions, maxParallelDownloads uint) 
 	var printBuffer strings.Builder
 	for true {
 		for downloadsInProgress < maxParallelDownloads && startedDownloads < len(sources) {
-			go download(sources[startedDownloads], stateWithNotifier[string]{state: &statuses[startedDownloads], notifier: statusUpdated}, logs)
+			go download(sources[startedDownloads], stateWithNotifier[downloadStatus]{state: &statuses[startedDownloads], notifier: statusUpdated}, logs)
 			startedDownloads += 1
 			downloadsInProgress += 1
 		}
@@ -169,10 +204,10 @@ func DownloadConcurrently(sources []DownloadOptions, maxParallelDownloads uint) 
 		}
 		downloadsInProgress = 0
 		for i, source := range sources {
-			if statuses[i] != "done" && statuses[i] != "failed" && statuses[i] != "queued" {
+			if statuses[i] != done && statuses[i] != failed && statuses[i] != queued {
 				downloadsInProgress += 1
 			}
-			printBuffer.Write([]byte(source.Name + ": " + statuses[i] + "\n"))
+			printBuffer.Write([]byte(source.Name + ": " + downloadStatusToAnsiString(statuses[i]) + "\n"))
 		}
 		printBuffer.Write([]byte(AnsiMoveCursorUp(len(sources))))
 		print(printBuffer.String()) // Print everything in one go to mitagate the terminal flashing

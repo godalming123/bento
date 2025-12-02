@@ -18,9 +18,14 @@ func CreateNoun(quantity int, singularNoun string, pluralNoun string) string {
 	}
 }
 
+const AnsiReset = "\033[0m"
 const AnsiClearBetweenCursorAndScreenEnd = "\033[0J"
 const AnsiBold = "\033[1m"
-const AnsiReset = "\033[0m"
+const AnsiFgRed = "\033[31m"
+const AnsiFgGreen = "\033[32m"
+const AnsiFgYellow = "\033[33m"
+const AnsiFgBlue = "\033[34m"
+const AnsiFgCyan = "\033[36m"
 
 func AnsiMoveCursorUp(numberOfLines int) string {
 	return "\033[" + strconv.Itoa(numberOfLines) + "A"

@@ -2,14 +2,14 @@
 
 A package manager with a focus on:
 
-- Having lots of packages (although currently there are less than a hundred)
+- Having lots of packages (although currently there are less than a thousand)
 - Just working on every linux distro
 - Not necesitating root permissions to be installed, and to install packages
 - Being fast at installing and running packages
 - Being small (installed packages do not take too much space)
 - Being minimal (bento itself is a single, statically-linked binary)
 - Not polluting the host system (all packages install to the same cache directory)
-- Being able to have multiple version of the same package installed at the same time (TODO)
+- (TODO) Being able to have multiple versions of the same package installed at the same time
 
 ## Todo
 
@@ -30,7 +30,7 @@ A package manager with a focus on:
 
 If any of these limitations mean that I cannot package something, then I will remove the limitation:
 
-- Binary names must be exclusive
+- Binary names must be unique
 - Library names must be exclusive
 - There are no post install scripts (I don't like post install scripts because they can sometimes be the longest part of a software installation, and there is no way to tell how long they will take)
 
